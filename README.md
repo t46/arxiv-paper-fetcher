@@ -4,6 +4,11 @@ arxivから論文を取得してNotionに保存するスクリプト
 
 ## 使い方
 
+### 0. Notion の設定
+- Notion Integration を設定する
+- データベースを作成する
+![alt text](image.png)
+
 ### 1. 環境変数の設定
 
 `.env`ファイルを作成して以下のように環境変数を設定します。
