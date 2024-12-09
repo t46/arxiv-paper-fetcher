@@ -3,6 +3,7 @@ import re
 import arxiv
 import datetime
 import requests
+import csv
 from typing import List, Dict, Optional, Set
 from bs4 import BeautifulSoup
 
@@ -14,36 +15,14 @@ class ArxivFilter:
     """論文のフィルタリングを行うクラス"""
     
     def __init__(self, keywords: List[str]):
-        """
-        Args:
-            keywords: アブストラクト内で検索するキーワードのリスト
-        """
         self.keywords = [keyword.lower() for keyword in keywords]
     
     def matches_keywords(self, abstract: str) -> bool:
-        """
-        論文のアブストラクトが指定されたキーワードを含むかチェック
-        
-        Args:
-            abstract: 論文のアブストラクト
-            
-        Returns:
-            キーワードを含む場合はTrue
-        """
         abstract_lower = abstract.lower()
         return any(keyword in abstract_lower for keyword in self.keywords)
     
     def is_published_yesterday(self, published_date: datetime.datetime) -> bool:
-        """
-        論文が昨日投稿されたかチェック
-        
-        Args:
-            published_date: 論文の投稿日時
-            
-        Returns:
-            昨日投稿された場合はTrue
-        """
-        yesterday = datetime.datetime.now().date() - datetime.timedelta(days=1)
+        yesterday = datetime.datetime.now().date() - datetime.timedelta(days=10)
         return published_date.date() == yesterday
 
 class ArxivFetcher:
@@ -51,33 +30,19 @@ class ArxivFetcher:
                  keywords: List[str],
                  max_results: int = 100,
                  sort_by: arxiv.SortCriterion = arxiv.SortCriterion.SubmittedDate):
-        """
-        Args:
-            keywords: フィルタリングに使用するキーワードのリスト
-            max_results: 1回の取得で取得する最大論文数
-            sort_by: ソート基準
-        """
         self.filter = ArxivFilter(keywords)
         self.max_results = max_results
         self.sort_by = sort_by
-        self.keywords = keywords  # キーワードを保持
+        self.keywords = keywords
         
     def fetch_papers(self) -> List[Dict]:
-        """
-        昨日投稿されたcs.LG論文のうち、指定されたキーワードを含むものを取得
-        
-        Returns:
-            フィルタリングされた論文情報のリスト
-        """
-        # 昨日の日付でクエリを構築
-        yesterday = datetime.datetime.now().date() - datetime.timedelta(days=1)
+        yesterday = datetime.datetime.now().date() - datetime.timedelta(days=10)
         date_str = yesterday.strftime("%Y%m%d")
         next_date = yesterday + datetime.timedelta(days=1)
         next_date_str = next_date.strftime("%Y%m%d")
         
         query = f'cat:cs.LG AND submittedDate:[{date_str}0000 TO {next_date_str}0000]'
         
-        # arxiv APIでの検索実行
         client = arxiv.Client(
             page_size=100,
             delay_seconds=3.0,
@@ -92,11 +57,8 @@ class ArxivFetcher:
         
         filtered_papers = []
         for result in client.results(search):
-            # キーワードでフィルタリング
             if not self.filter.matches_keywords(result.summary):
                 continue
-                
-            # 投稿日でフィルタリング
             if not self.filter.is_published_yesterday(result.published):
                 continue
             
@@ -109,11 +71,31 @@ class ArxivFetcher:
                 'published': result.published.strftime("%Y-%m-%d %H:%M:%S"),
                 'updated': result.updated.strftime("%Y-%m-%d %H:%M:%S"),
                 'categories': result.categories,
-                'keywords': self.keywords  # キーワードを保持
+                'keywords': self.keywords
             }
             filtered_papers.append(paper_info)
             
         return filtered_papers
+
+class CsvSaver:
+    """CSVファイルに保存するクラス"""
+    
+    def __init__(self, csv_path: str):
+        self.csv_path = csv_path
+    
+    def save(self, papers: List[Dict]):
+        with open(self.csv_path, mode='w', newline='', encoding='utf-8') as file:
+            writer = csv.DictWriter(file, fieldnames=['title', 'paper_url', 'github_url', 'published', 'keywords'])
+            writer.writeheader()
+            for paper in papers:
+                writer.writerow({
+                    'title': paper['title'],
+                    'paper_url': paper['pdf_url'],  # 'paper_url' として保存
+                    'github_url': paper.get('github_url', ''),  # GitHub URL
+                    'published': paper['published'],
+                    'keywords': ', '.join(paper['keywords'])
+                })
+        print(f"Saved {len(papers)} papers to CSV at {self.csv_path}")
 
 class NotionClient:
     def __init__(self, token: str, database_id: str):
@@ -301,30 +283,39 @@ class ArxivPaperProcessor:
                 print(f"Error adding paper to Notion: {paper['title']}, Error: {e}")
 
 def main():
-    # 環境変数から設定を取得
-    notion_token = os.getenv("NOTION_TOKEN")
-    notion_database_id = os.getenv("NOTION_DATABASE_ID")
+     # デフォルト保存先
+    default_save_to = "csv"
+    
+    # 保存先の選択（デフォルト値を使用）
+    save_to = input(f"Enter save destination (notion/csv) [Or press Enter for default: {default_save_to}]: ").strip().lower()
+    if not save_to:  # ユーザーが何も入力しなかった場合
+        save_to = default_save_to   
+    
+    if save_to not in ["notion", "csv"]:
+        raise ValueError("Invalid save destination. Choose 'notion' or 'csv'.")
+    
     keywords_str = input("Enter keywords separated by commas: ")
-    
-    if not notion_token or not notion_database_id:
-        raise ValueError("NOTION_TOKEN and NOTION_DATABASE_ID environment variables are required")
-    
-    # キーワードのリストを作成
     keywords = [k.strip() for k in keywords_str.split(",")]
     print(f"Filtering papers with keywords: {keywords}")
     
-    # NotionクライアントとArxivPaperProcessorを初期化
-    notion_client = NotionClient(notion_token, notion_database_id)
-    paper_processor = ArxivPaperProcessor(notion_client)
-    
-    # arxivから論文を取得（キーワードでフィルタリング）
     fetcher = ArxivFetcher(keywords=keywords, max_results=1000)
     papers = fetcher.fetch_papers()
-    
     print(f"Found {len(papers)} papers matching the criteria")
     
-    # 取得した論文を処理してNotionに登録
-    paper_processor.process_papers(papers)
+    if save_to == "notion":
+        notion_token = os.getenv("NOTION_TOKEN")
+        notion_database_id = os.getenv("NOTION_DATABASE_ID")
+        if not notion_token or not notion_database_id:
+            raise ValueError("NOTION_TOKEN and NOTION_DATABASE_ID environment variables are required for Notion.")
+        notion_client = NotionClient(notion_token, notion_database_id)
+        processor = ArxivPaperProcessor(notion_client)
+        processor.process_papers(papers)
+    elif save_to == "csv":
+        csv_path = os.getenv("CSV_PATH")
+        if not csv_path:
+            raise ValueError("CSV_PATH environment variable is required for saving to CSV.")
+        csv_saver = CsvSaver(csv_path)
+        csv_saver.save(papers)
 
 if __name__ == "__main__":
     main()
