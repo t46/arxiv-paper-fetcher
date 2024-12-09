@@ -1,10 +1,10 @@
 # arxiv-paper-fetcher
 
-arxivから論文を取得してNotionに保存するスクリプト
+arxivから論文を取得してNotionまたはCSVに保存するスクリプト
 
 ## 使い方
 
-### 0. Notion の設定
+### 0. Notion の設定 (CSV保存の場合は不要)
 - Notion Integration を設定する
 - データベースを作成する
 ![alt text](image.png)
@@ -15,6 +15,7 @@ arxivから論文を取得してNotionに保存するスクリプト
 ```.env
 NOTION_TOKEN=your_notion_token
 NOTION_DATABASE_ID=your_notion_database_id
+CSV_PATH=your_csv_path.csv
 ```
 
 ### 2. ライブラリのインストール
